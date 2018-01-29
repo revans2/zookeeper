@@ -111,6 +111,11 @@ public class LearnerHandlerTest extends ZKTestCase {
         public long calculateTxnLogSizeLimit() {
             return 1;
         }
+
+        @Override
+        public synchronized boolean isInCommittedLog(long zxId) {
+            return super.isInCommittedLog(committedLog, zxId);
+        }
     }
 
     private MockLearnerHandler learnerHandler;
@@ -441,11 +446,13 @@ public class LearnerHandlerTest extends ZKTestCase {
     public void testNewEpochZxid() throws Exception {
         long peerZxid;
         db.txnLog.add(createProposal(getZxid(0, 1)));
+        db.txnLog.add(createProposal(getZxid(1, 0)));
         db.txnLog.add(createProposal(getZxid(1, 1)));
         db.txnLog.add(createProposal(getZxid(1, 2)));
 
         // After leader election, lastProcessedZxid will point to new epoch
         db.lastProcessedZxid = getZxid(2, 0);
+        db.committedLog.add(createProposal(getZxid(1, 0)));
         db.committedLog.add(createProposal(getZxid(1, 1)));
         db.committedLog.add(createProposal(getZxid(1, 2)));
 
@@ -460,6 +467,8 @@ public class LearnerHandlerTest extends ZKTestCase {
 
         // Peer has zxid of epoch 1
         peerZxid = getZxid(1, 0);
+        //We are on a different epoch so we don't know 1, 0 is in our log or not.
+        // So we need to do a full SNAP
         assertFalse(learnerHandler.syncFollower(peerZxid, db, leader));
         // We send DIFF to (1, 2) and forward any packet starting at (1, 2)
         assertOpType(Leader.DIFF, getZxid(1, 2), getZxid(1, 2));
@@ -496,31 +505,20 @@ public class LearnerHandlerTest extends ZKTestCase {
 
         // Peer has zxid of epoch 3
         peerZxid = getZxid(3, 0);
-        assertFalse(learnerHandler.syncFollower(peerZxid, db, leader));
-        // We send DIFF to (6,0) and forward any packet starting at (4,1)
-        assertOpType(Leader.DIFF, getZxid(6, 0), getZxid(4, 1));
-        // DIFF + 1 proposals + 1 commit
-        assertEquals(3, learnerHandler.getQueuedPackets().size());
-        queuedPacketMatches(new long[] { getZxid(4, 1)});
+        //There is no 3, 0 proposal in the committed log so sync
+        assertTrue(learnerHandler.syncFollower(peerZxid, db, leader));
         reset();
 
         // Peer has zxid of epoch 4
         peerZxid = getZxid(4, 0);
-        assertFalse(learnerHandler.syncFollower(peerZxid, db, leader));
-        // We send DIFF to (6,0) and forward any packet starting at (4,1)
-        assertOpType(Leader.DIFF, getZxid(6, 0), getZxid(4, 1));
-        // DIFF + 1 proposals + 1 commit
-        assertEquals(3, learnerHandler.getQueuedPackets().size());
-        queuedPacketMatches(new long[] { getZxid(4, 1)});
+        //There is no 4, 0 proposal in the committed log so sync
+        assertTrue(learnerHandler.syncFollower(peerZxid, db, leader));
         reset();
 
         // Peer has zxid of epoch 5
         peerZxid = getZxid(5, 0);
-        assertFalse(learnerHandler.syncFollower(peerZxid, db, leader));
-        // We send DIFF to (6,0) and forward any packet starting at (5,0)
-        assertOpType(Leader.DIFF, getZxid(6, 0), getZxid(5, 0));
-        // DIFF only
-        assertEquals(1, learnerHandler.getQueuedPackets().size());
+        // There is no 5, 0 zxid in the committed log so needs to sync
+        assertTrue(learnerHandler.syncFollower(peerZxid, db, leader));
         reset();
 
         // Peer has zxid of epoch 6
@@ -556,14 +554,9 @@ public class LearnerHandlerTest extends ZKTestCase {
 
         // Peer has zxid of epoch 1
         peerZxid = getZxid(1, 0);
-        assertFalse(learnerHandler.syncFollower(peerZxid, db, leader));
-        // We send DIFF to (1, 2) and forward any packet starting at (1, 2)
-        assertOpType(Leader.DIFF, getZxid(1, 2), getZxid(1, 2));
-        // DIFF + 2 proposals + 2 commit
-        assertEquals(5, learnerHandler.getQueuedPackets().size());
-        queuedPacketMatches(new long[] { getZxid(1, 1), getZxid(1, 2)});
+        // The epoch is different so we need a snap
+        assertTrue(learnerHandler.syncFollower(peerZxid, db, leader));
         reset();
-
     }
 
     /**

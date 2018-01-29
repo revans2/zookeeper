@@ -670,6 +670,7 @@ public class LearnerHandler extends ZooKeeperThread {
         boolean isPeerNewEpochZxid = (peerLastZxid & 0xffffffffL) == 0;
         // Keep track of the latest zxid which already queued
         long currentZxid = peerLastZxid;
+        long peerLastEpoch = ZxidUtils.getEpochFromZxid(peerLastZxid);
         boolean needSnap = true;
         boolean txnLogSyncEnabled = (db.getSnapshotSizeFactor() >= 0);
         ReentrantReadWriteLock lock = db.getLogLock();
@@ -679,6 +680,7 @@ public class LearnerHandler extends ZooKeeperThread {
             long maxCommittedLog = db.getmaxCommittedLog();
             long minCommittedLog = db.getminCommittedLog();
             long lastProcessedZxid = db.getDataTreeLastProcessedZxid();
+            long lastProcessedEpoch = ZxidUtils.getEpochFromZxid(lastProcessedZxid);
 
             LOG.info("Synchronizing with Follower sid: {} maxCommittedLog=0x{}"
                     + " minCommittedLog=0x{} lastProcessedZxid=0x{}"
@@ -690,7 +692,7 @@ public class LearnerHandler extends ZooKeeperThread {
 
             if (db.getCommittedLog().isEmpty()) {
                 /*
-                 * It is possible that commitedLog is empty. In that case
+                 * It is possible that committedLog is empty. In that case
                  * setting these value to the latest txn in leader db
                  * will reduce the case that we need to handle
                  *
@@ -725,7 +727,7 @@ public class LearnerHandler extends ZooKeeperThread {
             } else if (lastProcessedZxid == peerLastZxid) {
                 // Follower is already sync with us, send empty diff
                 LOG.info("Sending DIFF zxid=0x" + Long.toHexString(peerLastZxid) +
-                         " for peer sid: " +  getSid());
+                    " for peer sid: " + getSid());
                 queueOpPacket(Leader.DIFF, peerLastZxid);
                 needOpPacket = false;
                 needSnap = false;
@@ -738,6 +740,11 @@ public class LearnerHandler extends ZooKeeperThread {
                 currentZxid = maxCommittedLog;
                 needOpPacket = false;
                 needSnap = false;
+            } else if (peerLastEpoch != lastProcessedEpoch && !db.isInCommittedLog(peerLastZxid)) {
+                //Be sure we do a snap, because if the epochs are not the same we don't know what
+                // could have happened in between and it may take a TRUNC + UPDATES to get them in SYNC
+                LOG.debug("Will send SNAP to peer sid: {} epochs are too our of sync local 0x{} remote 0x{}",
+                    getSid(), Long.toHexString(lastProcessedEpoch), Long.toHexString(peerLastEpoch));
             } else if ((maxCommittedLog >= peerLastZxid)
                     && (minCommittedLog <= peerLastZxid)) {
                 // Follower is within commitLog range
