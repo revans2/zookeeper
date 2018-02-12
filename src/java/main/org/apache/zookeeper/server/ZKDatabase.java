@@ -215,14 +215,32 @@ public class ZKDatabase {
      * @throws IOException
      */
     public long loadDataBase() throws IOException {
-        PlayBackListener listener=new PlayBackListener(){
+        PlayBackListener listener = new PlayBackListener(){
             public void onTxnLoaded(TxnHeader hdr,Record txn){
                 Request r = new Request(0, hdr.getCxid(),hdr.getType(), hdr, txn, hdr.getZxid());
                 addCommittedProposal(r);
             }
         };
 
-        long zxid = snapLog.restore(dataTree,sessionsWithTimeouts,listener);
+        long zxid = snapLog.restore(dataTree, sessionsWithTimeouts, listener);
+        initialized = true;
+        return zxid;
+    }
+
+    /**
+     * Fast forward the database adding transactions from the committed log into memory.
+     * @return the last valid zxid.
+     * @throws IOException
+     */
+    public long fastForwardDataBase() throws IOException {
+        PlayBackListener listener = new PlayBackListener(){
+            public void onTxnLoaded(TxnHeader hdr,Record txn){
+                Request r = new Request(0, hdr.getCxid(), hdr.getType(), hdr, txn, hdr.getZxid());
+                addCommittedProposal(r);
+            }
+        };
+
+        long zxid = snapLog.fastForwardFromEdits(dataTree, sessionsWithTimeouts, listener);
         initialized = true;
         return zxid;
     }
